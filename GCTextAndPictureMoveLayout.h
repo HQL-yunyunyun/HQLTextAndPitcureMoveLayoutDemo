@@ -10,6 +10,8 @@
 
 #import <CoreMedia/CoreMedia.h>
 
+#import "UIScrollView+GC_BoundaryScroll.h"
+
 @class GCTimeAndLengthRatio;
 
 /**

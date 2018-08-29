@@ -8,94 +8,11 @@
 
 #import "GCTextAndPictureMoveLayout.h"
 #import "GCTimeAndLengthRatio.h"
-#import <objc/runtime.h>
+#import "UICollectionViewCell+GCSnapshotView.h"
 
-CG_INLINE CGPoint GC_CGPointAdd(CGPoint point1, CGPoint point2) {
-    return CGPointMake(point1.x + point2.x, point1.y + point2.y);
-}
-
-CG_INLINE CGPoint GC_CGPointSubtract(CGPoint point1, CGPoint point2) {
-    return CGPointMake(point1.x - point2.x, point1.y - point2.y);
-}
-
-typedef NS_ENUM(NSInteger, GCScrollingDirection) {
-    GCScrollingDirectionUnknow = 0,
-    GCScrollingDirectionUp,
-    GCScrollingDirectionDown,
-    GCScrollingDirectionLeft,
-    GCScrollingDirectionRight,
-};
-
-static NSString *const kGCScrollingDirectionKey = @"GCScrollingDirection";
 static NSString *const kGCCollectionViewKeyPath = @"collectionView";
 
 static CGFloat kAnimationDuration = 0.3f;
-
-@interface CADisplayLink (GC_userInfo)
-@property (nonatomic, copy) NSDictionary *GC_userInfo;
-@end
-
-@implementation CADisplayLink (GC_userInfo)
-
-- (void)setGC_userInfo:(NSDictionary *)GC_userInfo {
-    objc_setAssociatedObject(self, "GC_userInfo", GC_userInfo, OBJC_ASSOCIATION_COPY);
-}
-
-- (NSDictionary *)GC_userInfo {
-    return objc_getAssociatedObject(self, "GC_userInfo");
-}
-
-@end
-
-@interface UICollectionViewCell (GCTextAndPictureMoveLayout)
-
-/**
- 将cell截图
- */
-- (UIView *)GC_snapshotView;
-
-/**
- cell截图 --- 去掉两边的button
- */
-- (UIView *)GC_snapshotViewOnlyValueWithClipWidth:(CGFloat)width;
-
-@end
-
-@implementation UICollectionViewCell (GCTextAndPictureMoveLayout)
-
-- (UIView *)GC_snapshotView {
-    if ([self respondsToSelector:@selector(snapshotViewAfterScreenUpdates:)]) {
-        return [self snapshotViewAfterScreenUpdates:YES];
-    }
-    
-    UIGraphicsBeginImageContextWithOptions(self.bounds.size, self.isOpaque, 0.0f);
-    [self.layer renderInContext:UIGraphicsGetCurrentContext()];
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return [[UIImageView alloc] initWithImage:image];
-}
-
-- (UIView *)GC_snapshotViewOnlyValueWithClipWidth:(CGFloat)width {
-    if ([self respondsToSelector:@selector(resizableSnapshotViewFromRect:afterScreenUpdates:withCapInsets:)]) {
-        return [self resizableSnapshotViewFromRect:CGRectMake(width, 0, self.bounds.size.width - 2 * width, self.bounds.size.height) afterScreenUpdates:YES withCapInsets:UIEdgeInsetsZero];
-    }
-    
-    UIGraphicsBeginImageContextWithOptions(self.bounds.size, self.isOpaque, 0.0f);
-    [self.layer renderInContext:UIGraphicsGetCurrentContext()];
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    
-    CGImageRef sourceImage = [image CGImage];
-    CGImageRef newImage = CGImageCreateWithImageInRect(sourceImage, CGRectMake(width, 0, self.bounds.size.width - 2 * width, self.bounds.size.height));
-    UIImage *new = [[UIImage alloc] initWithCGImage:newImage];
-    
-    CGImageRelease(sourceImage);
-    CGImageRelease(newImage);
-    
-    return [[UIImageView alloc] initWithImage:new];
-}
-
-@end
 
 @interface GCTextAndPictureMoveLayout ()
 
@@ -111,7 +28,6 @@ static CGFloat kAnimationDuration = 0.3f;
  记录原本的fakeView的center
  */
 @property (assign, nonatomic) CGPoint currentViewCenter;
-@property (strong, nonatomic) CADisplayLink *displayLink;
 
 @property (assign, nonatomic) CGPoint panMoveInCollectionView;
 @property (nonatomic, assign) CGPoint panLastLocationInCollectionView;
@@ -161,7 +77,7 @@ static CGFloat kAnimationDuration = 0.3f;
 
 - (void)dealloc {
     
-    [self invalidatesScrollTimer];
+    [self invalidateCollectionViewBoundaryScroll];
     [self tearDownCollectionView];
     [self removeObserver:self forKeyPath:kGCCollectionViewKeyPath context:nil];
     
@@ -170,26 +86,9 @@ static CGFloat kAnimationDuration = 0.3f;
 
 #pragma mark - private method
 
-- (void)setupScrollTimerInDirection:(GCScrollingDirection)scrollingDirection {
-    if (!self.displayLink.paused) {
-        GCScrollingDirection oldDirection = [self.displayLink.GC_userInfo[kGCScrollingDirectionKey] integerValue];
-        
-        if (scrollingDirection == oldDirection) {
-            return;
-        }
-    }
-    
-    [self invalidatesScrollTimer];
-    
-    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(handleScroll:)];
-    self.displayLink.GC_userInfo = @{kGCScrollingDirectionKey : @(scrollingDirection)};
-    
-    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-}
-
 - (void)setDefaults {
-    _scrollingSpeed = 100.0f;
-    _scrollingTriggerEdgeInsets = UIEdgeInsetsMake(50.0, 50.0, 50.0, 50.0);
+    self.scrollingSpeed = 100.0f;
+    self.scrollingTriggerEdgeInsets = UIEdgeInsetsMake(50.0, 50.0, 50.0, 50.0);
 }
 
 - (void)setupCollectionView {
@@ -248,15 +147,27 @@ static CGFloat kAnimationDuration = 0.3f;
     }
 }
 
-/**
- 取消定时器
- */
-- (void)invalidatesScrollTimer {
-    if (!self.displayLink.paused) {
-        [self.displayLink invalidate];
-    }
-    self.displayLink = nil;
+- (void)setupCollectionViewBoundaryScroll {
+    // 设置回调
+    self.collectionView.gc_scrollingSpeed = self.scrollingSpeed;
+    self.collectionView.gc_scrollingTriggerEdgeInsets = self.scrollingTriggerEdgeInsets;
+    __weak typeof(self) _self = self;
+    self.collectionView.gc_boundaryScrollHandle = ^(CGPoint scrollDistancePoint, GCScrollingDirection direction) {
+        // view的移动
+        [_self invalidateLayoutIfNecessaryWithMovePoint:scrollDistancePoint];
+        _self.panLastLocationInCollectionView = GC_CGPointAdd(_self.panLastLocationInCollectionView, scrollDistancePoint);
+    };
 }
+
+- (void)invalidateCollectionViewBoundaryScroll {
+    // 设置回调
+    self.collectionView.gc_scrollingSpeed = 0;
+    self.collectionView.gc_scrollingTriggerEdgeInsets = UIEdgeInsetsZero;
+    self.collectionView.gc_boundaryScrollHandle = nil;
+    [self.collectionView gc_invalidatesScrollTimer];
+}
+
+#pragma mark - 
 
 /**
  处理view 的移动
@@ -461,75 +372,6 @@ static CGFloat kAnimationDuration = 0.3f;
 
 #pragma mark - handle/action
 
-- (void)handleScroll:(CADisplayLink *)displayLink {
-    GCScrollingDirection direction = [displayLink.GC_userInfo[kGCScrollingDirectionKey] integerValue];
-    if (direction == GCScrollingDirectionUnknow) {
-        return;
-    }
-    
-    CGSize frameSize = self.collectionView.bounds.size;
-    CGSize contentSize = self.collectionView.contentSize;
-    CGPoint contentOffset = self.collectionView.contentOffset;
-    UIEdgeInsets contentInset = self.collectionView.contentInset;
-    // Important to have an integer `distance` as the `contentOffset` property automatically gets rounded
-    // and it would diverge from the view's center resulting in a "cell is slipping away under finger"-bug.
-    CGFloat distance = rint(self.scrollingSpeed * displayLink.duration);
-    CGPoint translation = CGPointZero;
-    
-    switch (direction) {
-        case GCScrollingDirectionUp: {
-            distance = -distance;
-            CGFloat minY = 0.0f - contentInset.top;
-            
-            if ((contentOffset.y + distance) <= minY) {
-                distance = -contentOffset.y - contentInset.top;
-            }
-            
-            translation = CGPointMake(0.0, distance);
-            break;
-        }
-        case GCScrollingDirectionDown: {
-            CGFloat maxY = MAX(contentSize.height, frameSize.height) - frameSize.height + contentInset.bottom;
-            
-            if ((contentOffset.y + distance) >= maxY) {
-                distance = maxY - contentOffset.y;
-            }
-            
-            translation = CGPointMake(0.0, distance);
-            
-            break;
-        }
-        case GCScrollingDirectionLeft: {
-            distance = -distance;
-            CGFloat minX = 0.0 - contentInset.left;
-            
-            if ((contentOffset.x + distance) <= minX) {
-                distance = -contentOffset.x - contentInset.left;
-            }
-            
-            translation = CGPointMake(distance, 0.0f);
-            break;
-        }
-        case GCScrollingDirectionRight: {
-            CGFloat maxX = MAX(contentSize.width, frameSize.width) - frameSize.width + contentInset.right;
-            
-            if ((contentOffset.x + distance) >= maxX) {
-                distance = maxX - contentOffset.x;
-            }
-            
-            translation = CGPointMake(distance, 0.0);
-            
-            break;
-        }
-        default: { break; }
-    }
-    
-    // view的移动
-    [self invalidateLayoutIfNecessaryWithMovePoint:translation];
-    self.collectionView.contentOffset = GC_CGPointAdd(contentOffset, translation);
-    self.panLastLocationInCollectionView = GC_CGPointAdd(self.panLastLocationInCollectionView, translation);
-}
-
 - (void)handleLongPressGesture:(UILongPressGestureRecognizer *)gestureRecognizer {
     
     switch (gestureRecognizer.state) {
@@ -645,6 +487,8 @@ static CGFloat kAnimationDuration = 0.3f;
 - (void)handlePanGesture:(UIPanGestureRecognizer *)gestureRecognizer {
     switch (gestureRecognizer.state) {
         case UIGestureRecognizerStateBegan: {
+            // 每次手势开始都将重新设置
+            [self setupCollectionViewBoundaryScroll];
             self.panLastLocationInCollectionView = [gestureRecognizer locationInView:self.collectionView];
             break;
         }
@@ -667,54 +511,29 @@ static CGFloat kAnimationDuration = 0.3f;
             }
             
             BOOL canScroll = NO;
-            UICollectionViewScrollDirection scrollDirection = UICollectionViewScrollDirectionHorizontal;
+            NSString *scrollDirection = kGCScrollDirectionHorizontal;
             
             if (canMoveTime && canMoveLine) { // 两者皆可
                 canScroll = YES;
                 CGPoint velocity = [gestureRecognizer velocityInView:self.collectionView];
                 if (fabs(velocity.x) < fabs(velocity.y)) {
-                    scrollDirection = UICollectionViewScrollDirectionVertical;
+                    scrollDirection = kGCScrollDirectionVertical;
                 }
                 
             } else if (canMoveTime) { // 可以水平移动
                 canScroll = YES;
-                scrollDirection = UICollectionViewScrollDirectionHorizontal;
+                scrollDirection = kGCScrollDirectionHorizontal;
             } else if (canMoveLine) { // 可以垂直移动
                 canScroll = YES;
-                scrollDirection = UICollectionViewScrollDirectionVertical;
+                scrollDirection = kGCScrollDirectionVertical;
             } else { // 两个方向都不可以移动
                 canScroll = NO;
             }
             
             if (canScroll) {
                 
-                switch (scrollDirection) {
-                    case UICollectionViewScrollDirectionVertical: {
-                        if (self.currentViewCenter.y <= (CGRectGetMinY(self.collectionView.bounds) + self.scrollingTriggerEdgeInsets.top)) {
-                            [self setupScrollTimerInDirection:GCScrollingDirectionUp];
-                        } else {
-                            if (self.currentViewCenter.y > (CGRectGetMaxY(self.collectionView.bounds) - self.scrollingTriggerEdgeInsets.bottom)) {
-                                [self setupScrollTimerInDirection:GCScrollingDirectionDown];
-                            } else {
-                                [self invalidatesScrollTimer];
-                            }
-                        }
-                        break;
-                    }
-                    case UICollectionViewScrollDirectionHorizontal: {
-                        if (self.currentViewCenter.x <= (CGRectGetMinX(self.collectionView.bounds) + self.scrollingTriggerEdgeInsets.left)) {
-                            [self setupScrollTimerInDirection:GCScrollingDirectionLeft];
-                        } else {
-                            if (self.currentViewCenter.x > (CGRectGetMaxX(self.collectionView.bounds) - self.scrollingTriggerEdgeInsets.right)) {
-                                [self setupScrollTimerInDirection:GCScrollingDirectionRight];
-                            } else {
-                                [self invalidatesScrollTimer];
-                            }
-                        }
-                        break;
-                    }
-                    default: { break; }
-                }
+                // 设置滑动方向
+                [self.collectionView gc_boundaryScrollWithCurrentPoint:self.panLastLocationInCollectionView scrollDirection:scrollDirection];
             }
             
             break;
@@ -722,7 +541,7 @@ static CGFloat kAnimationDuration = 0.3f;
         case UIGestureRecognizerStateEnded:
         case UIGestureRecognizerStateCancelled: {
             // 取消Timer
-            [self invalidatesScrollTimer];
+            [self invalidateCollectionViewBoundaryScroll];
             break;
         }
         default: { break; }
@@ -953,7 +772,7 @@ static CGFloat kAnimationDuration = 0.3f;
     if ([self.longPressGestureRecognizer isEqual:gestureRecognizer]) {
         return [self.panGestureRecognizer isEqual:otherGestureRecognizer];
     }
-    
+
     if ([self.panGestureRecognizer isEqual:gestureRecognizer]) {
         return [self.longPressGestureRecognizer isEqual:otherGestureRecognizer];
     }
@@ -968,7 +787,7 @@ static CGFloat kAnimationDuration = 0.3f;
         if (self.collectionView != nil) {
             [self setupCollectionView];
         } else {
-            [self invalidatesScrollTimer];
+            [self.collectionView gc_invalidatesScrollTimer];
             [self tearDownCollectionView];
         }
     }

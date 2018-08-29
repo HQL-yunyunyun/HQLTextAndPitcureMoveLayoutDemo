@@ -11,6 +11,7 @@
 #import "GCTextAndPictureMoveLayout.h"
 #import "GCTimeAndLengthRatio.h"
 #import "GCTextAndPictureMoveCell.h"
+#import "UIScrollView+GC_BoundaryScroll.h"
 
 #import <Masonry.h>
 
@@ -33,6 +34,10 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
 @property (nonatomic, assign) GCScrollDirection direction;
 @property (nonatomic, assign) CGPoint beginContentOffset;
 
+@property (nonatomic, assign) NSInteger currentMoveIndex;
+@property (nonatomic, assign) CGPoint lastCellMovePoint;
+@property (nonatomic, strong) GCTextAndPictureMoveCell *currentCell;
+
 @end
 
 @implementation ViewController
@@ -42,6 +47,13 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
     
     [self bulidData];
     [self prepareUI];
+    
+    self.currentMoveIndex = NSNotFound;
+}
+
+- (void)dealloc {
+    [self invalidateBoundaryScroll];
+    NSLog(@"dealloc ---> %@", NSStringFromClass([self class]));
 }
 
 - (void)bulidData {
@@ -55,6 +67,9 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
         CMTime duration = CMTimeMakeWithSeconds(1, 600);
         CMTime start = CMTimeMultiply(duration, i);
         model.timeRange = CMTimeRangeMake(start, duration);
+        if (i == 0) {
+            model.timeRange = CMTimeRangeMake(model.timeRange.start, CMTimeMakeWithSeconds(90, 600));
+        }
         [self.dataSource addObject:model];
     }
 }
@@ -111,6 +126,50 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
     }];
 }
 
+- (void)setupBoundaryScroll {
+    self.collectionView.gc_scrollingSpeed = 50.0;
+    self.collectionView.gc_scrollingTriggerEdgeInsets = UIEdgeInsetsMake(0, 50, 0, 50);
+    __weak typeof(self) _self = self;
+    self.collectionView.gc_boundaryScrollHandle = ^(CGPoint scrollDistancePoint, GCScrollingDirection direction) {
+        
+        if (_self.currentMoveIndex == NSNotFound) {
+            return;
+        }
+        
+        BOOL isStartTime = NO;
+        switch (direction) {
+            case GCScrollingDirectionLeft: {
+                isStartTime = YES;
+                break;
+            }
+            case GCScrollingDirectionRight: {
+                isStartTime = NO;
+                break;
+            }
+            default: {
+                @throw [[NSException alloc] initWithName:@"Boundary Scroll Error" reason:@"Unsupport Direction" userInfo:nil];
+                break;
+            }
+        }
+        
+        // 改变lastMovePoint
+        GCTextAndPictureMoveCell *cell = (GCTextAndPictureMoveCell *)[_self.collectionView cellForItemAtIndexPath:[NSIndexPath indexPathForItem:_self.currentMoveIndex inSection:0]];
+         _self.lastCellMovePoint = GC_CGPointAdd(_self.lastCellMovePoint, scrollDistancePoint);
+        [cell updateLastMovePoint:_self.lastCellMovePoint];
+        if (_self.currentCell.m_indexPath.item == _self.currentMoveIndex && _self.currentCell) {
+            [_self.currentCell updateLastMovePoint:_self.lastCellMovePoint];
+        }
+        [_self moveHandleWithIndex:_self.currentMoveIndex isChangeStartTime:isStartTime moveDistance:scrollDistancePoint.x];
+    };
+}
+
+- (void)invalidateBoundaryScroll {
+    [self.collectionView gc_invalidatesScrollTimer];
+    self.collectionView.gc_scrollingTriggerEdgeInsets = UIEdgeInsetsZero;
+    self.collectionView.gc_scrollingSpeed = 0.0;
+    self.collectionView.gc_boundaryScrollHandle = nil;
+}
+
 - (void)buttonEvent:(UIButton *)button {
     switch (button.tag) {
         case 0: {
@@ -131,6 +190,60 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
     }
 }
 
+- (BOOL)moveHandleWithIndex:(NSInteger)index isChangeStartTime:(BOOL)isChangeStartTime moveDistance:(CGFloat)distance {
+    // 获取model
+    if (index < 0 || index >= self.dataSource.count) {
+        return NO;
+    }
+    
+    HQLCollectionModel *model = self.dataSource[index];
+    
+    // 先转换
+    CMTime moveTime = [self.currentRatio calculateTimeWithLength:distance];
+    
+    CMTimeRange originRange = model.timeRange;
+    
+    // 判断
+    BOOL isOver = NO;
+    CMTime minDuration = CMTimeMakeWithSeconds(1, 600);
+    if (isChangeStartTime) { // 改变开始时间
+        originRange.start = CMTimeAdd(originRange.start, CMTimeMultiply(moveTime, (-1)));
+        originRange.duration = CMTimeAdd(originRange.duration, moveTime);
+        // 需要判断开始时间是否小于0/duration是否小于1
+        if (CMTimeCompare(originRange.start, kCMTimeZero) < 0) { // 开始时间小于0 --- 持续时间不会小于1
+            CMTime subtractTime = CMTimeSubtract(kCMTimeZero, originRange.start);
+            originRange.start = kCMTimeZero;
+            originRange.duration = CMTimeSubtract(originRange.duration, subtractTime);
+            CMTimeShow(subtractTime);
+            isOver = YES;
+        }
+        // 最少1秒
+        if (CMTimeCompare(originRange.duration, minDuration) < 0) { // 持续时间小于1秒
+            originRange.start = CMTimeSubtract(CMTimeAdd(originRange.start, originRange.duration), minDuration);
+            originRange.duration = minDuration;
+            isOver = YES;
+        }
+    } else {
+        originRange.duration = CMTimeAdd(originRange.duration, moveTime);
+        
+        // 需要判断结束时间是否大于最大值/duration是否小于1
+        if (CMTimeCompare(CMTimeAdd(originRange.start, originRange.duration), [self totalTime]) > 0) { // 大于
+            originRange.duration = CMTimeSubtract([self totalTime], originRange.start);
+            isOver = YES;
+        }
+        // 最少1秒
+        if (CMTimeCompare(originRange.duration, minDuration) < 0) {
+            originRange.duration = minDuration;
+            isOver = YES;
+        }
+    }
+    
+    model.timeRange = originRange;
+    
+    [self.collectionView reloadItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:index inSection:0]]];
+    return (!isOver);
+}
+
 #pragma mark - UICollectionViewDataSource
 
 - (NSInteger)numberOfSectionsInCollectionView:(UICollectionView *)collectionView {
@@ -144,6 +257,29 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
 - (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
     GCTextAndPictureMoveCell *cell = (GCTextAndPictureMoveCell *)[collectionView dequeueReusableCellWithReuseIdentifier:@"cellReuseId" forIndexPath:indexPath];
     cell.currentItem = indexPath.item;
+    cell.m_indexPath = indexPath;
+    
+    __weak typeof(self) _self = self;
+    cell.moveHandle = ^(GCTextAndPictureMoveCell *aCell, BOOL isChangeStartTime, CGFloat moveDistance) {
+        if (_self.currentMoveIndex == NSNotFound) {
+            return;
+        }
+        [_self moveHandleWithIndex:_self.currentMoveIndex isChangeStartTime:isChangeStartTime moveDistance:moveDistance];
+    };
+    cell.beginMoveHandle = ^(GCTextAndPictureMoveCell *aCell) {
+        _self.currentMoveIndex = indexPath.item;
+        _self.currentCell = aCell;
+        [_self setupBoundaryScroll];
+    };
+    cell.endMoveHandle = ^(GCTextAndPictureMoveCell *aCell) {
+         _self.currentMoveIndex = NSNotFound;
+        [_self invalidateBoundaryScroll];
+    };
+    cell.movingHandle = ^(GCTextAndPictureMoveCell *aCell, CGPoint currentPoint) {
+        _self.lastCellMovePoint = currentPoint;
+        [_self.collectionView gc_boundaryScrollWithCurrentPoint:currentPoint scrollDirection:kGCScrollDirectionHorizontal];
+    };
+    
     return cell;
 }
 
@@ -211,7 +347,7 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
  获取collectionView要显示的总时长
  */
 - (CMTime)collectionViewTotalTime:(UICollectionView *)collectionView layout:(GCTextAndPictureMoveLayout *)layout {
-    return CMTimeMakeWithSeconds(100, 600);
+    return [self totalTime];
 }
 
 /**
@@ -302,6 +438,12 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
         return;
     }
     model.timeRange = CMTimeRangeMake(time, model.timeRange.duration);
+}
+
+#pragma mark - getter
+
+- (CMTime)totalTime {
+    return CMTimeMakeWithSeconds(100, 600);
 }
 
 @end

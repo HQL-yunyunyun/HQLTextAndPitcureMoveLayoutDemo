@@ -20,6 +20,15 @@
 @property (nonatomic, strong) UIButton *leftButton;
 @property (nonatomic, strong) UIButton *rightButton;
 
+// 左边的手势
+@property (nonatomic, strong) UIPanGestureRecognizer *leftPanGesture;
+// 右边的手势
+@property (nonatomic, strong) UIPanGestureRecognizer *rightPanGesture;
+
+@property (nonatomic, assign) BOOL isDurationPanGesture;
+
+@property (nonatomic, assign) CGPoint lastPanPoint;
+
 @end
 
 @implementation GCTextAndPictureMoveCell
@@ -64,10 +73,94 @@
         make.width.mas_equalTo(30);
     }];
     
+    // 添加手势
+    UIPanGestureRecognizer *leftPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panGestureHandle:)];
+    self.leftPanGesture = leftPan;
+    [leftButton addGestureRecognizer:leftPan];
+    
+    UIPanGestureRecognizer *rightPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panGestureHandle:)];
+    self.rightPanGesture = rightPan;
+    [rightButton addGestureRecognizer:rightPan];
+    
     [self setBackgroundColor:[UIColor redColor]];
 }
 
 #pragma mark - event
+
+#pragma mark - PanGestureHandle
+
+- (void)panGestureHandle:(UIPanGestureRecognizer *)panGesture {
+    
+    if (!self.superview) {
+        return;
+    }
+    
+    switch (panGesture.state) {
+        case UIGestureRecognizerStateBegan: {
+            
+            self.isDurationPanGesture = YES;
+            
+            // begin
+            if (panGesture == self.rightPanGesture) {
+                [self.leftPanGesture setEnabled:NO];
+            } else {
+                [self.rightPanGesture setEnabled:NO];
+            }
+            
+            self.lastPanPoint = [panGesture locationInView:self.superview];
+            
+            if (self.beginMoveHandle) {
+                self.beginMoveHandle(self);
+            }
+            
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            
+            CGPoint currentPoint = [panGesture locationInView:self.superview];
+            CGFloat xDistance = currentPoint.x - self.lastPanPoint.x;
+            
+            BOOL isChangeStartTime = (panGesture == self.leftPanGesture ? YES : NO);
+            
+            if (isChangeStartTime) {
+                xDistance *= (-1);
+            }
+            
+            if (self.moveHandle) {
+                self.moveHandle(self, isChangeStartTime, xDistance);
+            }
+            
+            self.lastPanPoint = currentPoint;
+            
+            if (self.movingHandle) {
+                self.movingHandle(self, self.lastPanPoint);
+            }
+            
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateFailed:
+        case UIGestureRecognizerStateCancelled: {
+            
+            self.isDurationPanGesture = NO;
+            
+            [self.leftPanGesture setEnabled:YES];
+            [self.rightPanGesture setEnabled:YES];
+            
+            if (self.endMoveHandle) {
+                self.endMoveHandle(self);
+            }
+            
+            break;
+        }
+        default: { break; }
+    }
+    
+}
+
+- (void)updateLastMovePoint:(CGPoint)lastMovePoint {
+    self.lastPanPoint = lastMovePoint;
+}
 
 #pragma mark - setter & getter
 
