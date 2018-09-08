@@ -52,6 +52,8 @@ static CGFloat kAnimationDuration = 0.3f;
     
     NSMutableArray *_insertArray;
     NSMutableArray *_deleteArray;
+    NSMutableArray *_afterArray;
+    NSMutableArray *_beforeArray;
 }
 
 #pragma mark - initialize method
@@ -696,6 +698,8 @@ static CGFloat kAnimationDuration = 0.3f;
     // 暂时只有删除和插入
     _insertArray = [NSMutableArray array];
     _deleteArray = [NSMutableArray array];
+    _beforeArray = [NSMutableArray array];
+    _afterArray = [NSMutableArray array];
     
     for (UICollectionViewUpdateItem *update in updateItems) {
         
@@ -706,6 +710,12 @@ static CGFloat kAnimationDuration = 0.3f;
             }
             case UICollectionUpdateActionDelete: {
                 [_deleteArray addObject:update.indexPathBeforeUpdate];
+                break;
+            }
+            case UICollectionUpdateActionReload: {
+                NSLog(@"Before reload index : %ld ,After : %ld", update.indexPathBeforeUpdate.item, update.indexPathAfterUpdate.item);
+                [_beforeArray addObject:update.indexPathBeforeUpdate];
+                [_afterArray addObject:update.indexPathAfterUpdate];
                 break;
             }
                 // 其他的情况不考虑
@@ -723,29 +733,59 @@ static CGFloat kAnimationDuration = 0.3f;
     _insertArray = nil;
     [_deleteArray removeAllObjects];
     _deleteArray = nil;
+    [_beforeArray removeAllObjects];
+    _beforeArray = nil;
+    [_afterArray removeAllObjects];
+    _afterArray = nil;
 }
 
 - (UICollectionViewLayoutAttributes *)initialLayoutAttributesForAppearingItemAtIndexPath:(NSIndexPath *)itemIndexPath {
     UICollectionViewLayoutAttributes *attributes = [super initialLayoutAttributesForAppearingItemAtIndexPath:itemIndexPath];
+    /*
     if ([_deleteArray containsObject:itemIndexPath] ||
         [_insertArray containsObject:itemIndexPath]) {
         if (!attributes) {
             attributes = [self layoutAttributesForItemAtIndexPath:itemIndexPath];
         }
         attributes.alpha =0.0;
+    }//*/
+    
+    /*
+    if ([_beforeArray containsObject:itemIndexPath]) {
+        if (!attributes) {
+            attributes = [self layoutAttributesForItemAtIndexPath:itemIndexPath];
+        }
+        attributes.hidden = YES;
     }
+    if ([_afterArray containsObject:itemIndexPath]) {
+        if (!attributes) {
+            attributes = [self layoutAttributesForItemAtIndexPath:itemIndexPath];
+        }
+       // attributes.alpha = 1.0;
+    }
+    //*/
+    
     return attributes;
 }
 
 - (UICollectionViewLayoutAttributes *)finalLayoutAttributesForDisappearingItemAtIndexPath:(NSIndexPath *)itemIndexPath {
     UICollectionViewLayoutAttributes *attributes = [super finalLayoutAttributesForDisappearingItemAtIndexPath:itemIndexPath];
+    /*
     if ([_insertArray containsObject:itemIndexPath] ||
         [_deleteArray containsObject:itemIndexPath]) {
         if (!attributes) {
             attributes = [self layoutAttributesForItemAtIndexPath:itemIndexPath];
         }
         attributes.alpha = 0.0;
-    }
+    }//*/
+    
+    /*
+    if ([_afterArray containsObject:itemIndexPath]) {
+        if (!attributes) {
+            attributes = [self layoutAttributesForItemAtIndexPath:itemIndexPath];
+        }
+        attributes.hidden = NO;
+    }//*/
     
     return attributes;
 }

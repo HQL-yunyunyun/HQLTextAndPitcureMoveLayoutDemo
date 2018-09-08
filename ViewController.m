@@ -174,13 +174,13 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
     switch (button.tag) {
         case 0: {
             
-            [self.collectionView setContentOffset:CGPointMake(self.collectionView.contentOffset.x + 100, self.collectionView.contentOffset.y) animated:YES];
+            [self.collectionView setContentOffset:CGPointMake(self.collectionView.contentOffset.x + 100, self.collectionView.contentOffset.y) animated:NO];
             
             break;
         }
         case 1: {
             
-            [self.collectionView setContentOffset:CGPointMake(self.collectionView.contentOffset.x, self.collectionView.contentOffset.y + 100) animated:YES];
+            [self.collectionView setContentOffset:CGPointMake(self.collectionView.contentOffset.x, self.collectionView.contentOffset.y + 100) animated:NO];
             
             break;
         }
@@ -240,7 +240,12 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
     
     model.timeRange = originRange;
     
-    [self.collectionView reloadItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:index inSection:0]]];
+//    [self.collectionView reloadItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:index inSection:0]]];
+    GCTextAndPictureMoveCell *cell = (GCTextAndPictureMoveCell *)[self.collectionView cellForItemAtIndexPath:[NSIndexPath indexPathForItem:index inSection:0]];
+    
+    UICollectionViewLayoutAttributes *attri = [self.collectionView.collectionViewLayout layoutAttributesForItemAtIndexPath:[NSIndexPath indexPathForItem:index inSection:0]];
+    [cell setFrame:attri.frame];
+    
     return (!isOver);
 }
 
@@ -292,6 +297,8 @@ typedef NS_ENUM(NSInteger, GCScrollDirection) {
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    
+    NSLog(@"didscroll");
     
     if (self.direction == GCScrollDirectionUnDefine) {
         GCScrollDirection scrollDirection = GCScrollDirectionNone;
